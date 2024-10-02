@@ -51,7 +51,7 @@
 - `main.ts`: メインのスクリプトファイル
 - `search_history.json`: 検索履歴を保存するJSONファイル
 - `monitored_urls.json`: 監視対象のURLを保存するJSONファイル
-
+- `setup_and_run.bat`:環境を自動ダウンロードと、実行するファイル
 ## 注意事項
 
 - このスクリプトは教育目的で作成されています。使用する際は、Amazon.co.jpの利用規約を遵守してください。
