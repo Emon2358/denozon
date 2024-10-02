@@ -1,7 +1,5 @@
 # Amazon Product Monitor
-
 ![IMG_6072](https://github.com/user-attachments/assets/222f4118-6414-489b-9db4-0fac4ccf3648)
-
 このプロジェクトは、Amazon.co.jpの商品を監視し、価格変更や在庫状況の変化をリアルタイムで通知するDenoスクリプトです。キーワード検索による商品モニタリングと、特定のURLの商品監視の両方をサポートしています。
 
 ## 機能
