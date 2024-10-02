@@ -14,6 +14,7 @@ if (!WEBHOOK_URL) {
 }
 
 const SEARCH_HISTORY_FILE = "search_history.json";
+const MONITORED_URLS_FILE = "monitored_urls.json";
 const CHECK_INTERVAL = 1 * 60 * 1000; // 1 minute
 
 interface Product {
@@ -126,6 +127,53 @@ async function scrapeAmazon(keyword: string): Promise<Product[]> {
   return products;
 }
 
+async function scrapeAmazonProduct(url: string): Promise<Product | null> {
+  const browser = await puppeteer.launch({
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+  const page = await browser.newPage();
+  await page.setUserAgent(getRandomUserAgent());
+
+  try {
+    await page.goto(url, {
+      waitUntil: "networkidle0",
+      timeout: 60000,
+    });
+  } catch (error) {
+    console.error("Navigation timed out. Proceeding with partial page load.");
+  }
+
+  const product = await page.evaluate(() => {
+    const titleElement = document.querySelector("#productTitle");
+    const priceElement = document.querySelector(".a-price .a-offscreen");
+    const availabilityElement = document.querySelector("#availability");
+
+    let available = true;
+    if (availabilityElement) {
+      const availabilityText =
+        availabilityElement.textContent?.toLowerCase() || "";
+      available =
+        !availabilityText.includes("在庫切れ") &&
+        !availabilityText.includes("currently unavailable") &&
+        !availabilityText.includes("out of stock");
+    }
+
+    return {
+      title: titleElement?.textContent?.trim() || "",
+      price: priceElement
+        ? parseFloat(
+            priceElement.textContent?.replace(/[^\d.-]/g, "") || "Infinity"
+          )
+        : Infinity,
+      available: available,
+      url: window.location.href,
+    };
+  });
+
+  await browser.close();
+  return product.title !== "" && product.price !== Infinity ? product : null;
+}
+
 async function saveSearchHistory(keyword: string) {
   let history: string[] = [];
   if (await exists(SEARCH_HISTORY_FILE)) {
@@ -141,6 +189,18 @@ async function saveSearchHistory(keyword: string) {
 async function loadSearchHistory(): Promise<string[]> {
   if (await exists(SEARCH_HISTORY_FILE)) {
     const fileContent = await Deno.readTextFile(SEARCH_HISTORY_FILE);
+    return JSON.parse(fileContent);
+  }
+  return [];
+}
+
+async function saveMonitoredUrls(urls: string[]) {
+  await Deno.writeTextFile(MONITORED_URLS_FILE, JSON.stringify(urls));
+}
+
+async function loadMonitoredUrls(): Promise<string[]> {
+  if (await exists(MONITORED_URLS_FILE)) {
+    const fileContent = await Deno.readTextFile(MONITORED_URLS_FILE);
     return JSON.parse(fileContent);
   }
   return [];
@@ -198,6 +258,42 @@ async function monitorProducts(keyword: string) {
   }, CHECK_INTERVAL);
 }
 
+async function monitorSpecificUrls() {
+  const monitoredUrls = await loadMonitoredUrls();
+  console.log(`Monitoring ${monitoredUrls.length} specific URLs...`);
+
+  let previousProducts: (Product | null)[] = await Promise.all(
+    monitoredUrls.map((url) => scrapeAmazonProduct(url))
+  );
+
+  setInterval(async () => {
+    try {
+      const currentProducts = await Promise.all(
+        monitoredUrls.map((url) => scrapeAmazonProduct(url))
+      );
+
+      for (let i = 0; i < currentProducts.length; i++) {
+        const current = currentProducts[i];
+        const previous = previousProducts[i];
+
+        if (current && previous) {
+          if (!previous.available && current.available) {
+            await sendWebhookMessage(
+              "Product Now Available",
+              `${current.title} - ¥${current.price}`,
+              current.url
+            );
+          }
+        }
+      }
+
+      previousProducts = currentProducts;
+    } catch (error) {
+      console.error("An error occurred during specific URL monitoring:", error);
+    }
+  }, CHECK_INTERVAL);
+}
+
 async function main() {
   const args = parse(Deno.args);
   let keyword = args._[0] as string | undefined;
@@ -212,8 +308,24 @@ async function main() {
     await saveSearchHistory(keyword);
     await monitorProducts(keyword);
   } else {
-    console.log("No keyword provided. Exiting program.");
+    console.log("No keyword provided. Monitoring specific URLs only.");
   }
+
+  // Ask for URLs to monitor
+  const monitoredUrls = await loadMonitoredUrls();
+  console.log("Currently monitored URLs:", monitoredUrls);
+
+  const newUrl = prompt(
+    "Enter a new URL to monitor (or press Enter to skip): "
+  );
+  if (newUrl && newUrl.trim() !== "") {
+    monitoredUrls.push(newUrl.trim());
+    await saveMonitoredUrls(monitoredUrls);
+  }
+
+  // Start monitoring specific URLs
+  await monitorSpecificUrls();
 }
 
 main();
+
