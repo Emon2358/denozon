@@ -14,8 +14,6 @@
 
 ## 必要条件
 
-- Deno 1.20.0以上
-- Puppeteer（Denoバージョン）
 - Discord Webhook URL
 
 ## セットアップ
@@ -28,11 +26,7 @@
    WEBHOOK_URL=あなたのDiscord_Webhook_URL
    ```
 
-3. 必要なDenoの権限を付与してスクリプトを実行します：
-
-   ```
-   deno run --allow-net --allow-read --allow-write --allow-env main.ts
-   ```
+3. setup_and_run.batを実行します。
 
 ## 使用方法
 
