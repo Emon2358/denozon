@@ -1,5 +1,5 @@
 # denozon
-![IMG_6075](https://github.com/user-attachments/assets/017f37f5-7385-47a7-8b9e-498bafc3a091)
+
 このプロジェクトは、Amazon.co.jpの商品を監視し、価格変更や在庫状況の変化をリアルタイムで通知するDenoスクリプトです。キーワード検索による商品モニタリングと、特定のURLの商品監視の両方をサポートしています。
 
 ## 機能
