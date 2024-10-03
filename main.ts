@@ -73,19 +73,21 @@ async function scrapeAmazon(keyword: string): Promise<Product[]> {
 
   try {
     await page.goto(url, {
-      waitUntil: "networkidle0",
-      timeout: 60000, // Increase timeout to 60 seconds
+      waitUntil: "domcontentloaded",
+      timeout: 30000, // 30 seconds timeout
     });
   } catch (error) {
-    console.error("Navigation timed out. Proceeding with partial page load.");
+    console.warn("Navigation timed out. Proceeding with partial page load.");
   }
 
   // Wait for the product grid to load
-  await page.waitForSelector(".s-result-item", { timeout: 10000 }).catch(() => {
+  try {
+    await page.waitForSelector(".s-result-item", { timeout: 10000 });
+  } catch (error) {
     console.warn(
       "Product grid selector not found. Page might not have loaded completely."
     );
-  });
+  }
 
   const products = await page.evaluate(() => {
     const items = Array.from(document.querySelectorAll(".s-result-item"));
@@ -136,11 +138,11 @@ async function scrapeAmazonProduct(url: string): Promise<Product | null> {
 
   try {
     await page.goto(url, {
-      waitUntil: "networkidle0",
-      timeout: 60000,
+      waitUntil: "domcontentloaded",
+      timeout: 30000, // 30 seconds timeout
     });
   } catch (error) {
-    console.error("Navigation timed out. Proceeding with partial page load.");
+    console.warn("Navigation timed out. Proceeding with partial page load.");
   }
 
   const product = await page.evaluate(() => {
@@ -209,19 +211,31 @@ async function loadMonitoredUrls(): Promise<string[]> {
 async function monitorProducts(keyword: string) {
   console.log(`Monitoring products for "${keyword}"...`);
   let previousProducts = await scrapeAmazon(keyword);
-  let cheapestProduct = previousProducts.reduce((min, p) =>
-    p.price < min.price ? p : min
-  );
+  let initialCheapestPrice = Infinity;
 
-  await sendWebhookMessage(
-    "Cheapest Product",
-    `${cheapestProduct.title} - ¥${cheapestProduct.price}`,
-    cheapestProduct.url
-  );
+  if (previousProducts.length === 0) {
+    console.log("No products found. Retrying in 1 minute...");
+  } else {
+    const cheapestProduct = previousProducts.reduce((min, p) =>
+      p.price < min.price ? p : min
+    );
+    initialCheapestPrice = cheapestProduct.price;
 
-  setInterval(async () => {
+    await sendWebhookMessage(
+      "Initial Cheapest Product",
+      `${cheapestProduct.title} - ¥${cheapestProduct.price}`,
+      cheapestProduct.url
+    );
+  }
+
+  while (true) {
     try {
       const currentProducts = await scrapeAmazon(keyword);
+      if (currentProducts.length === 0) {
+        console.log("No products found. Retrying in 1 minute...");
+        await new Promise((resolve) => setTimeout(resolve, CHECK_INTERVAL));
+        continue;
+      }
 
       const newlyAvailable = currentProducts.filter(
         (cur) =>
@@ -242,20 +256,22 @@ async function monitorProducts(keyword: string) {
       const newCheapestProduct = currentProducts.reduce((min, p) =>
         p.price < min.price ? p : min
       );
-      if (newCheapestProduct.price < cheapestProduct.price) {
-        cheapestProduct = newCheapestProduct;
+      if (newCheapestProduct.price < initialCheapestPrice) {
         await sendWebhookMessage(
           "New Cheapest Product",
-          `${cheapestProduct.title} - ¥${cheapestProduct.price}`,
-          cheapestProduct.url
+          `${newCheapestProduct.title} - ¥${newCheapestProduct.price} (Initial: ¥${initialCheapestPrice})`,
+          newCheapestProduct.url
         );
+        initialCheapestPrice = newCheapestProduct.price;
       }
 
       previousProducts = currentProducts;
     } catch (error) {
       console.error("An error occurred during product monitoring:", error);
     }
-  }, CHECK_INTERVAL);
+
+    await new Promise((resolve) => setTimeout(resolve, CHECK_INTERVAL));
+  }
 }
 
 async function monitorSpecificUrls() {
@@ -266,7 +282,7 @@ async function monitorSpecificUrls() {
     monitoredUrls.map((url) => scrapeAmazonProduct(url))
   );
 
-  setInterval(async () => {
+  while (true) {
     try {
       const currentProducts = await Promise.all(
         monitoredUrls.map((url) => scrapeAmazonProduct(url))
@@ -284,6 +300,12 @@ async function monitorSpecificUrls() {
               current.url
             );
           }
+        } else if (current && !previous) {
+          await sendWebhookMessage(
+            "New Product Found",
+            `${current.title} - ¥${current.price}`,
+            current.url
+          );
         }
       }
 
@@ -291,27 +313,24 @@ async function monitorSpecificUrls() {
     } catch (error) {
       console.error("An error occurred during specific URL monitoring:", error);
     }
-  }, CHECK_INTERVAL);
+
+    await new Promise((resolve) => setTimeout(resolve, CHECK_INTERVAL));
+  }
 }
 
-async function main() {
-  const args = parse(Deno.args);
-  let keyword = args._[0] as string | undefined;
-
-  if (!keyword) {
-    const history = await loadSearchHistory();
-    console.log("Search history:", history);
-    keyword = prompt("Enter search keyword: ") || undefined;
-  }
-
+async function handleSearchOption() {
+  const history = await loadSearchHistory();
+  console.log("Search history:", history);
+  const keyword = prompt("Enter search keyword: ");
   if (keyword) {
     await saveSearchHistory(keyword);
     await monitorProducts(keyword);
   } else {
-    console.log("No keyword provided. Monitoring specific URLs only.");
+    console.log("No keyword provided. Returning to menu.");
   }
+}
 
-  // Ask for URLs to monitor
+async function handleUrlOption() {
   const monitoredUrls = await loadMonitoredUrls();
   console.log("Currently monitored URLs:", monitoredUrls);
 
@@ -321,11 +340,57 @@ async function main() {
   if (newUrl && newUrl.trim() !== "") {
     monitoredUrls.push(newUrl.trim());
     await saveMonitoredUrls(monitoredUrls);
+    console.log("URL added successfully.");
   }
 
-  // Start monitoring specific URLs
   await monitorSpecificUrls();
 }
 
-main();
+function displayGradientAsciiArt() {
+  const asciiArt = `
+       __                                                             
+      /  |                                                            
+  ____$$ |  ______   _______    ______   ________   ______   _______  
+ /    $$ | /      \\ /       \\  /      \\ /        | /      \\ /       \\ 
+/$$$$$$$ |/$$$$$$  |$$$$$$$  |/$$$$$$  |$$$$$$$$/ /$$$$$$  |$$$$$$$  |
+$$ |  $$ |$$    $$ |$$ |  $$ |$$ |  $$ |  /  $$/  $$ |  $$ |$$ |  $$ |
+$$ \\__$$ |$$$$$$$$/ $$ |  $$ |$$ \\__$$ | /$$$$/__ $$ \\__$$ |$$ |  $$ |
+$$    $$ |$$       |$$ |  $$ |$$    $$/ /$$      |$$    $$/ $$ |  $$ |
+ $$$$$$$/  $$$$$$$/ $$/   $$/  $$$$$$/  $$$$$$$$/  $$$$$$/  $$/   $$/
+`;
 
+  const lines = asciiArt.split("\n");
+  lines.forEach((line, index) => {
+    const blueValue = Math.max(0, 255 - index * 25);
+    console.log(`\x1b[38;2;${blueValue};${blueValue};255m${line}\x1b[0m`);
+  });
+}
+
+async function main() {
+  while (true) {
+    displayGradientAsciiArt();
+
+    console.log("\n1. Search and monitor products");
+    console.log("2. Monitor specific URLs");
+    console.log("3. Exit");
+
+    const choice = prompt("Enter your choice (1-3): ");
+
+    switch (choice) {
+      case "1":
+        await handleSearchOption();
+        break;
+      case "2":
+        await handleUrlOption();
+        break;
+      // deno-lint-ignore no-fallthrough
+      case "3":
+        console.log("Exiting the program. Goodbye!");
+        Deno.exit(0);
+      default:
+        console.log("Invalid choice. Please try again.");
+    }
+  }
+}
+
+main();
